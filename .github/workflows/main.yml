@@ -1,13 +1,130 @@
-name: Build and test of Java Project
+name: Build Docker, Push to ACR, Deploy to Azure Container Apps
+
 on: [push]
+
+# Permisos necesarios para que GitHub Actions pueda usar el token de Azure (OIDC) sin secretos largos
+permissions:
+  id-token: write
+  contents: read
+
 jobs:
-  build:
+  # ---------------------------------------------------
+  # 1. INTEGRACIÓN CONTINUA (CI) - Compilar y Testear
+  # ---------------------------------------------------
+  build_test:
     runs-on: ubuntu-latest
     steps:
-        - uses: actions/checkout@v2
-        - name: Set up JDK 1.8
-          uses: actions/setup-java@v1
-          with:
-            java-version: 1.8
-        - name: Build with Maven
-          run: mvn -B package --file pom.xml
+      - uses: actions/checkout@v2
+      - name: Set up JDK 1.8
+        uses: actions/setup-java@v1
+        with:
+          java-version: 1.8
+      - name: Build with Maven
+        run: mvn -B package --file pom.xml
+
+  # ---------------------------------------------------
+  # 2. ENTREGA CONTINUA (CD) - Entorno de Staging
+  # ---------------------------------------------------
+  deploy_staging:
+    needs: build_test
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Azure login con OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Init
+        working-directory: ./iac
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TFSTATE_KEY_STAGING }}"
+
+      - name: Terraform Apply
+        working-directory: ./iac
+        run: |
+          terraform apply -auto-approve \
+            -var="location=${{ vars.AZURE_LOCATION }}" \
+            -var="suffix=${{ vars.SUFFIX }}" \
+            -var="environment=stg"
+            
+      - name: Build Docker, Push to ACR y Deploy
+        run: |
+          # Nombre del ACR y Recursos basados en el SUFFIX que configuraste
+          ACR_NAME="ems${{ vars.SUFFIX }}stgacr"
+          APP_NAME="ems-${{ vars.SUFFIX }}-stg-app"
+          RG_NAME="ems-${{ vars.SUFFIX }}-stg-rg"
+          
+          # 1. Login en el registro de contenedores de Azure
+          az acr login -n $ACR_NAME
+          
+          # 2. Compilar imagen de Docker y subirla
+          docker build -t $ACR_NAME.azurecr.io/hola:${{ github.sha }} .
+          docker push $ACR_NAME.azurecr.io/hola:${{ github.sha }}
+          
+          # 3. Desplegar la nueva imagen en Azure Container Apps
+          az containerapp registry set -n $APP_NAME -g $RG_NAME --server $ACR_NAME.azurecr.io --identity system
+          az containerapp update -n $APP_NAME -g $RG_NAME --image $ACR_NAME.azurecr.io/hola:${{ github.sha }}
+
+  # ---------------------------------------------------
+  # 3. ENTREGA CONTINUA (CD) - Entorno de Producción
+  # ---------------------------------------------------
+  deploy_production:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build_test
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Azure login con OIDC
+        uses: azure/login@v1
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+
+      - name: Terraform Init
+        working-directory: ./iac
+        run: |
+          terraform init \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${{ vars.TFSTATE_KEY_PRODUCTION }}"
+
+      - name: Terraform Apply
+        working-directory: ./iac
+        run: |
+          terraform apply -auto-approve \
+            -var="location=${{ vars.AZURE_LOCATION }}" \
+            -var="suffix=${{ vars.SUFFIX }}" \
+            -var="environment=prd"
+            
+      - name: Build Docker, Push to ACR y Deploy
+        run: |
+          ACR_NAME="ems${{ vars.SUFFIX }}prdacr"
+          APP_NAME="ems-${{ vars.SUFFIX }}-prd-app"
+          RG_NAME="ems-${{ vars.SUFFIX }}-prd-rg"
+          
+          az acr login -n $ACR_NAME
+          
+          docker build -t $ACR_NAME.azurecr.io/hola:${{ github.sha }} .
+          docker push $ACR_NAME.azurecr.io/hola:${{ github.sha }}
+          
+          az containerapp registry set -n $APP_NAME -g $RG_NAME --server $ACR_NAME.azurecr.io --identity system
+          az containerapp update -n $APP_NAME -g $RG_NAME --image $ACR_NAME.azurecr.io/hola:${{ github.sha }}
