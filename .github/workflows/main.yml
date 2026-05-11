@@ -66,8 +66,8 @@ jobs:
             
       - name: Build Docker, Push to ACR y Deploy
         run: |
-          # Nombre del ACR y Recursos basados en el SUFFIX que configuraste
-          ACR_NAME="ems${{ vars.SUFFIX }}stgacr"
+          # CORREGIDO: Sin 'acr' al final para que coincida con Azure
+          ACR_NAME="ems${{ vars.SUFFIX }}stg"
           APP_NAME="ems-${{ vars.SUFFIX }}-stg-app"
           RG_NAME="ems-${{ vars.SUFFIX }}-stg-rg"
           
@@ -99,6 +99,9 @@ jobs:
           client-id: ${{ vars.AZURE_CLIENT_ID }}
           tenant-id: ${{ vars.AZURE_TENANT_ID }}
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
       
       - name: Terraform Init
         working-directory: ./iac
@@ -124,7 +127,8 @@ jobs:
             
       - name: Build Docker, Push to ACR y Deploy
         run: |
-          ACR_NAME="ems${{ vars.SUFFIX }}prdacr"
+          # CORREGIDO: Sin 'acr' al final para que coincida con Azure
+          ACR_NAME="ems${{ vars.SUFFIX }}prd"
           APP_NAME="ems-${{ vars.SUFFIX }}-prd-app"
           RG_NAME="ems-${{ vars.SUFFIX }}-prd-rg"
           
