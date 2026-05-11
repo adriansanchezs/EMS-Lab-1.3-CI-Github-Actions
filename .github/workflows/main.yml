@@ -125,15 +125,16 @@ jobs:
             
       - name: Build Docker, Push to ACR y Deploy
         run: |
-          # CORREGIDO: Sin 'acr' al final para que coincida con Azure
-          ACR_NAME="ems${{ vars.SUFFIX }}prd"
-          APP_NAME="ems-${{ vars.SUFFIX }}-prd-app"
-          RG_NAME="ems-${{ vars.SUFFIX }}-prd-rg"
+          ACR_NAME="ems${{ vars.SUFFIX }}stg"
+          APP_NAME="ems-${{ vars.SUFFIX }}-stg-app"
+          RG_NAME="ems-${{ vars.SUFFIX }}-stg-rg"
           
+          # 1. Login en el registro de contenedores de Azure
           az acr login -n $ACR_NAME
           
+          # 2. Compilar imagen de Docker y subirla
           docker build -t $ACR_NAME.azurecr.io/hola:${{ github.sha }} .
           docker push $ACR_NAME.azurecr.io/hola:${{ github.sha }}
           
-          az containerapp registry set -n $APP_NAME -g $RG_NAME --server $ACR_NAME.azurecr.io --identity system
+          # 3. Actualizar la imagen (Terraform ya enlazó el ACR con la identidad correcta)
           az containerapp update -n $APP_NAME -g $RG_NAME --image $ACR_NAME.azurecr.io/hola:${{ github.sha }}
